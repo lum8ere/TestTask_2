@@ -7,6 +7,7 @@ import (
 	"test_task2/infrastructure/config"
 	db "test_task2/infrastructure/database"
 	"test_task2/infrastructure/logger"
+	"test_task2/infrastructure/middlewares"
 	"test_task2/infrastructure/smartContext"
 
 	_ "test_task2/docs"
@@ -42,6 +43,7 @@ func main() {
 
 	// Настройка маршрутов
 	r := chi.NewRouter()
+	r.Use(middlewares.RecoveryMiddleware(ctx))
 	r.Get("/songs", utils.HandleWrapper(ctx, handlers.GetLibraryHandler, "group", "title", "page", "limit"))
 	r.Post("/songs", utils.HandleWrapper(ctx, handlers.AddSongHandler, "group", "song"))
 	r.Get("/songs/{id}/text", utils.HandleWrapper(ctx, handlers.GetSongTextHandler, "id", "page"))
