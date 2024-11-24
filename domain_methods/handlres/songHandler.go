@@ -1,23 +1,14 @@
-package handler
+package handlers
 
 import (
-	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"test_task2/domain_methods/service"
 	"test_task2/domain_methods/utils"
+	"test_task2/infrastructure/smartContext"
 	"test_task2/models"
-
-	"github.com/go-chi/chi/v5"
-	"go.uber.org/zap"
-	"gorm.io/gorm"
 )
-
-type Handler struct {
-	DB        *gorm.DB
-	Logger    *zap.Logger
-	APIServer string
-}
 
 // @Summary Add a new song
 // @Description Добавление новой песни в библиотеку
@@ -26,41 +17,39 @@ type Handler struct {
 // @Success 201 {object} models.Song
 // @Failure 400 {object} map[string]string
 // @Router /songs [post]
-func (h *Handler) AddSong(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Group string `json:"group"`
-		Song  string `json:"song"`
+func AddSongHandler(ctx *smartContext.SmartContext, w http.ResponseWriter, r *http.Request, params map[string]interface{}) (interface{}, error) {
+	group, ok := params["group"].(string)
+	if !ok {
+		ctx.Errorf("Missing 'group' parameter")
+		return nil, errors.New("missing group")
+	}
+	song, ok := params["song"].(string)
+	if !ok {
+		ctx.Errorf("Missing 'song' parameter")
+		return nil, errors.New("missing song")
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		h.Logger.Error("Invalid input", zap.Error(err))
-		http.Error(w, "Invalid input", http.StatusBadRequest)
-		return
-	}
-
-	details, err := service.FetchSongDetails(h.APIServer, input.Group, input.Song)
+	ctx.Debugf("Fetching song details for group='%s', song='%s'", group, song)
+	details, err := service.FetchSongDetails(ctx.GetAPIServer(), group, song)
 	if err != nil {
-		h.Logger.Error("Failed to fetch song details", zap.Error(err))
-		http.Error(w, "Failed to fetch song details", http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 
-	song := models.Song{
-		Group:       input.Group,
-		Title:       input.Song,
+	newSong := models.Song{
+		Group:       group,
+		Title:       song,
 		ReleaseDate: details.ReleaseDate,
 		Text:        details.Text,
 		Link:        details.Link,
 	}
 
-	if err := h.DB.Create(&song).Error; err != nil {
-		h.Logger.Error("Failed to save song", zap.Error(err))
-		http.Error(w, "Failed to save song", http.StatusInternalServerError)
-		return
+	if err := ctx.GetDB().Create(&newSong).Error; err != nil {
+		ctx.Errorf("Failed to save new song: %v", err)
+		return nil, err
 	}
 
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(song)
+	ctx.Infof("Successfully added new song: %v", newSong)
+	return newSong, nil
 }
 
 // @Summary Get library of songs
@@ -73,33 +62,33 @@ func (h *Handler) AddSong(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {array} models.Song
 // @Failure 400 {object} map[string]string
 // @Router /songs [get]
-func (h *Handler) GetLibrary(w http.ResponseWriter, r *http.Request) {
-	query := h.DB.Model(&models.Song{})
-	page := r.URL.Query().Get("page")
-	limit := r.URL.Query().Get("limit")
+func GetLibraryHandler(ctx *smartContext.SmartContext, w http.ResponseWriter, r *http.Request, params map[string]interface{}) (interface{}, error) {
+	query := ctx.GetDB().Model(&models.Song{})
 
 	// Фильтрация
-	if group := r.URL.Query().Get("group"); group != "" {
-		query = query.Where(`"group" = ?`, group) // Экранируем "group"
+	if group, ok := params["group"].(string); ok {
+		ctx.Errorf("Missing 'group' parameter")
+		query = query.Where(`"group" = ?`, group)
 	}
-	if title := r.URL.Query().Get("title"); title != "" {
+	if title, ok := params["title"].(string); ok {
+		ctx.Errorf("Missing 'title' parameter")
 		query = query.Where("title = ?", title)
 	}
 
 	// Пагинация
-	var songs []models.Song
-	p, l := 1, 10 // значения по умолчанию
-	if page != "" {
-		p = utils.ParseInt(page, 1)
-	}
-	if limit != "" {
-		l = utils.ParseInt(limit, 10)
-	}
-	offset := (p - 1) * l
-	query.Offset(offset).Limit(l).Find(&songs)
+	page := utils.ParseInt(params["page"], 1)
+	limit := utils.ParseInt(params["limit"], 10)
+	offset := (page - 1) * limit
 
-	// Ответ
-	json.NewEncoder(w).Encode(songs)
+	ctx.Debugf("pagination params: page: %v, song: %v, offset: %v", page, limit)
+
+	var songs []models.Song
+	if err := query.Offset(offset).Limit(limit).Find(&songs).Error; err != nil {
+		return nil, err
+	}
+
+	ctx.Infof("Successfully received songs in quantity: %v", len(songs))
+	return songs, nil
 }
 
 // @Summary Get song text
@@ -110,26 +99,27 @@ func (h *Handler) GetLibrary(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]string
 // @Failure 404 {object} map[string]string
 // @Router /songs/{id}/text [get]
-func (h *Handler) GetSongText(w http.ResponseWriter, r *http.Request) {
-	songID := chi.URLParam(r, "id")
-	page := utils.ParseInt(r.URL.Query().Get("page"), 1)
+func GetSongTextHandler(ctx *smartContext.SmartContext, w http.ResponseWriter, r *http.Request, params map[string]interface{}) (interface{}, error) {
+	id, ok := params["id"].(string)
+	if !ok {
+		ctx.Errorf("Missing 'id' parameter")
+		return nil, errors.New("missing id")
+	}
+	page := utils.ParseInt(params["page"], 1)
 
 	var song models.Song
-	if err := h.DB.First(&song, songID).Error; err != nil {
-		http.Error(w, "Song not found", http.StatusNotFound)
-		return
+	if err := ctx.GetDB().First(&song, id).Error; err != nil {
+		return nil, errors.New("song not found")
 	}
+	ctx.Debugf("Got a song: %v", song.Title)
 
 	verses := strings.Split(song.Text, "\n\n")
 	if page < 1 || page > len(verses) {
-		http.Error(w, "Invalid page number", http.StatusBadRequest)
-		return
+		return nil, errors.New("invalid page number")
 	}
 
-	response := map[string]string{
-		"verse": verses[page-1],
-	}
-	json.NewEncoder(w).Encode(response)
+	ctx.Infof("verses on the way out: %v", verses[page-1])
+	return map[string]string{"verse": verses[page-1]}, nil
 }
 
 // @Summary Delete a song
@@ -139,15 +129,20 @@ func (h *Handler) GetSongText(w http.ResponseWriter, r *http.Request) {
 // @Success 204 "Песня успешно удалена"
 // @Failure 404 {object} map[string]string
 // @Router /songs/{id} [delete]
-func (h *Handler) DeleteSong(w http.ResponseWriter, r *http.Request) {
-	songID := chi.URLParam(r, "id")
-
-	if err := h.DB.Delete(&models.Song{}, songID).Error; err != nil {
-		http.Error(w, "Failed to delete song", http.StatusInternalServerError)
-		return
+func DeleteSongHandler(ctx *smartContext.SmartContext, w http.ResponseWriter, r *http.Request, params map[string]interface{}) (interface{}, error) {
+	id, ok := params["id"].(string)
+	if !ok {
+		ctx.Errorf("Missing 'id' parameter")
+		return nil, errors.New("missing id")
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	if err := ctx.GetDB().Delete(&models.Song{}, id).Error; err != nil {
+		ctx.Errorf("Failed to delete song: %v", err)
+		return nil, err
+	}
+
+	ctx.Infof("Deleted song with ID: %v", id)
+	return map[string]string{"message": "song deleted successfully"}, nil
 }
 
 // @Summary Update a song
@@ -158,48 +153,41 @@ func (h *Handler) DeleteSong(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} models.Song
 // @Failure 400 {object} map[string]string
 // @Router /songs/{id} [put]
-func (h *Handler) UpdateSong(w http.ResponseWriter, r *http.Request) {
-	songID := chi.URLParam(r, "id")
-
-	var input struct {
-		Group       *string `json:"group"`
-		Title       *string `json:"title"`
-		ReleaseDate *string `json:"release_date"`
-		Text        *string `json:"text"`
-		Link        *string `json:"link"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, "Invalid input", http.StatusBadRequest)
-		return
+func UpdateSongHandler(ctx *smartContext.SmartContext, w http.ResponseWriter, r *http.Request, params map[string]interface{}) (interface{}, error) {
+	id, ok := params["id"].(string)
+	if !ok {
+		ctx.Errorf("Missing 'id' parameter")
+		return nil, errors.New("missing id")
 	}
 
 	var song models.Song
-	if err := h.DB.First(&song, songID).Error; err != nil {
-		http.Error(w, "Song not found", http.StatusNotFound)
-		return
+	if err := ctx.GetDB().First(&song, id).Error; err != nil {
+		ctx.Errorf("Failed to find song: %v", err)
+		return nil, errors.New("song not found")
 	}
 
-	if input.Group != nil {
-		song.Group = *input.Group
+	ctx.Debugf("Song: %v", song)
+
+	if group, ok := params["group"].(string); ok {
+		song.Group = group
 	}
-	if input.Title != nil {
-		song.Title = *input.Title
+	if title, ok := params["title"].(string); ok {
+		song.Title = title
 	}
-	if input.ReleaseDate != nil {
-		song.ReleaseDate = *input.ReleaseDate
+	if releaseDate, ok := params["release_date"].(string); ok {
+		song.ReleaseDate = releaseDate
 	}
-	if input.Text != nil {
-		song.Text = *input.Text
+	if text, ok := params["text"].(string); ok {
+		song.Text = text
 	}
-	if input.Link != nil {
-		song.Link = *input.Link
+	if link, ok := params["link"].(string); ok {
+		song.Link = link
 	}
 
-	if err := h.DB.Save(&song).Error; err != nil {
-		http.Error(w, "Failed to update song", http.StatusInternalServerError)
-		return
+	if err := ctx.GetDB().Save(&song).Error; err != nil {
+		return nil, err
 	}
 
-	json.NewEncoder(w).Encode(song)
+	ctx.Infof("Successfully updated song: %v", song)
+	return song, nil
 }

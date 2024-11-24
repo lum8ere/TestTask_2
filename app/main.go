@@ -1,17 +1,18 @@
 package main
 
 import (
-	"log"
 	"net/http"
-	handler "test_task2/domain_methods/handlres"
+	handlers "test_task2/domain_methods/handlres"
+	"test_task2/domain_methods/utils"
 	"test_task2/infrastructure/config"
 	db "test_task2/infrastructure/database"
+	"test_task2/infrastructure/logger"
+	"test_task2/infrastructure/smartContext"
 
 	_ "test_task2/docs"
 
 	"github.com/go-chi/chi/v5"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
-	"go.uber.org/zap"
 	_ "gorm.io/gorm"
 )
 
@@ -26,29 +27,30 @@ import (
 // @BasePath /
 func main() {
 	cfg := config.LoadConfig()
-	logger, _ := zap.NewProduction()
-	defer logger.Sync()
 
-	db, err := db.Migrate(cfg.DBURL)
+	// Создаем логгер
+	log := logger.NewLogger()
+
+	// Создаем подключение к базе данных
+	database, err := db.Migrate(cfg.DBURL)
 	if err != nil {
-		logger.Fatal("Failed to connect to DB", zap.Error(err))
+		log.Fatalf("Failed to connect to DB: %v", err)
 	}
 
-	h := &handler.Handler{
-		DB:        db,
-		Logger:    logger,
-		APIServer: cfg.APIServer,
-	}
+	// Создаем AppContext
+	ctx := smartContext.NewSmartContext(database, log, cfg.APIServer)
 
+	// Настройка маршрутов
 	r := chi.NewRouter()
-	r.Get("/songs", h.GetLibrary)            // Получение библиотеки
-	r.Get("/songs/{id}/text", h.GetSongText) // Получение текста песни
-	r.Delete("/songs/{id}", h.DeleteSong)    // Удаление песни
-	r.Put("/songs/{id}", h.UpdateSong)       // Изменение песни
-	r.Post("/songs", h.AddSong)              // Добавление новой песни
+	r.Get("/songs", utils.HandleWrapper(ctx, handlers.GetLibraryHandler, "group", "title", "page", "limit"))
+	r.Post("/songs", utils.HandleWrapper(ctx, handlers.AddSongHandler, "group", "song"))
+	r.Get("/songs/{id}/text", utils.HandleWrapper(ctx, handlers.GetSongTextHandler, "id", "page"))
+	r.Delete("/songs/{id}", utils.HandleWrapper(ctx, handlers.DeleteSongHandler, "id"))
+	r.Put("/songs/{id}", utils.HandleWrapper(ctx, handlers.UpdateSongHandler, "id", "group", "title", "release_date", "text", "link"))
 
+	// Swagger
 	r.Get("/swagger/*", httpSwagger.WrapHandler)
 
-	logger.Info("Starting server on :9000")
+	log.Infof("Starting server on :9000")
 	log.Fatal(http.ListenAndServe(":9000", r))
 }
