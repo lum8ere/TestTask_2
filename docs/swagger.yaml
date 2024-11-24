@@ -1,0 +1,186 @@
+basePath: /
+definitions:
+  models.Song:
+    properties:
+      created_at:
+        description: Время создания
+        type: string
+      deleted_at:
+        description: Soft-delete
+        type: string
+      group:
+        description: Название группы
+        type: string
+      id:
+        description: Первичный ключ
+        type: integer
+      link:
+        description: Ссылка
+        type: string
+      releaseDate:
+        description: Дата релиза
+        type: string
+      text:
+        description: Текст песни
+        type: string
+      title:
+        description: Название песни
+        type: string
+      updated_at:
+        description: Время обновления
+        type: string
+    type: object
+host: localhost:9000
+info:
+  contact:
+    email: support@example.com
+    name: API Support
+  description: API для управления библиотекой песен.
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  title: Songs API
+  version: "1.0"
+paths:
+  /songs:
+    get:
+      description: Получение библиотеки песен с фильтрацией по полям и пагинацией
+      parameters:
+      - description: Название группы
+        in: query
+        name: group
+        type: string
+      - description: Название песни
+        in: query
+        name: title
+        type: string
+      - default: 1
+        description: Номер страницы
+        in: query
+        name: page
+        type: integer
+      - default: 10
+        description: Количество элементов на странице
+        in: query
+        name: limit
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.Song'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get library of songs
+      tags:
+      - Songs
+    post:
+      description: Добавление новой песни в библиотеку
+      parameters:
+      - description: Данные новой песни
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/models.Song'
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.Song'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Add a new song
+      tags:
+      - Songs
+  /songs/{id}:
+    delete:
+      description: Удаление песни из библиотеки
+      parameters:
+      - description: ID песни
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: Песня успешно удалена
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete a song
+      tags:
+      - Songs
+    put:
+      description: Обновление данных песни
+      parameters:
+      - description: ID песни
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Данные песни
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/models.Song'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.Song'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update a song
+      tags:
+      - Songs
+  /songs/{id}/text:
+    get:
+      description: Получение текста песни с пагинацией по куплетам
+      parameters:
+      - description: ID песни
+        in: path
+        name: id
+        required: true
+        type: integer
+      - default: 1
+        description: Номер куплета
+        in: query
+        name: page
+        required: true
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get song text
+      tags:
+      - Songs
+swagger: "2.0"
